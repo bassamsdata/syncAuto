@@ -2,11 +2,23 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
+
+// config file should look like this
+
+// [folders]
+//     [folders.folder1]
+//     source = "~/Sync/test"
+//     destinations = ["googledrive:test"]
+//
+//     [folders.folder2]
+//     source = "/home/docs/sync"
+//     destinations = ["onedrive:test"]
 
 // Config structure
 type FolderConfig struct {
@@ -20,7 +32,7 @@ type Config struct {
 
 func main() {
 
-	// Load TOML configuration
+	// TODO: Create file if it doesn't exist
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		fmt.Println("Error reading config.toml:", err)
@@ -70,6 +82,12 @@ func syncToRemote(folder, sourceRemote, destRemote string) {
 }
 
 func expandTilde(path string) (string, error) {
-	// TODO: add if statement to support for tilde
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return strings.Replace(path, "~", home, 1), nil
+	}
 	return path, nil
 }
