@@ -8,6 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// Config structure
 type FolderConfig struct {
 	Source       string   `toml:"source"`
 	Destinations []string `toml:"destinations"`
@@ -19,13 +20,16 @@ type Config struct {
 
 func main() {
 
+	// Load TOML configuration
 	var config Config
 	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
 		fmt.Println("Error reading config.toml:", err)
 		return
 	}
 
+	// Sync logic
 	for folderName, folder := range config.Folders {
+		// TODO: add func to handle relative paths as well and delete this expandenv
 		expandedSource := os.ExpandEnv(folder.Source)
 		// TEST: test if expandedSource is valid
 		fmt.Printf("Syncing %s to %s\n", expandedSource, folderName)
