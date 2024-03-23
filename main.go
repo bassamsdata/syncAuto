@@ -91,3 +91,45 @@ func expandTilde(path string) (string, error) {
 	}
 	return path, nil
 }
+
+func createConfigFile() error {
+	// TODO: Move it to init() function
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("error getting home directory: %v", err)
+	}
+
+	configDir := filepath.Join(homeDir, ".config", "syncAuto")
+	configFile := filepath.Join(configDir, "config.toml")
+
+	// Check if the config file already exists
+	if _, err := os.Stat(configFile); err == nil {
+		fmt.Println("Config file already exists at:", configFile)
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("error checking for config file: %v", err)
+	}
+
+	err = os.MkdirAll(configDir, 0755)
+	if err != nil {
+		return fmt.Errorf("error creating config directory: %v", err)
+	}
+
+	// Create an initial default config
+	defaultConfig := Config{
+		Folders: map[string]FolderConfig{},
+	}
+
+	f, err := os.Create(configFile)
+	if err != nil {
+		return fmt.Errorf("error creating config file: %v", err)
+	}
+	defer f.Close()
+
+	if err := toml.NewEncoder(f).Encode(defaultConfig); err != nil {
+		return fmt.Errorf("error writing default config to file: %v", err)
+	}
+
+	fmt.Println("Config file created at:", configFile)
+	return nil
+}
