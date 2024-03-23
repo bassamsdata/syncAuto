@@ -15,6 +15,8 @@ import (
 // config file should look like this
 
 // TODO: add comments to the code
+//TODO: add logic to truncate the log file with no dependency before getting so big
+// TODO: move the logging logic to a separate function
 
 // [folders]
 //     [folders.folder1]
