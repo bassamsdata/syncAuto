@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
 
+// TODO: add function to create and write basic config file
 // config file should look like this
 
 // [folders]
@@ -22,8 +24,8 @@ import (
 
 // Config structure
 type FolderConfig struct {
-	Source       string   `toml:"source"`
-	Destinations []string `toml:"destinations"`
+	Source      string   `toml:"source"`
+	Destination []string `toml:"destination"`
 }
 
 type Config struct {
@@ -32,9 +34,15 @@ type Config struct {
 
 func main() {
 
-	// TODO: Create file if it doesn't exist
+	if err := createConfigFile(); err != nil {
+		fmt.Println("Error creating config file:", err)
+	}
+
 	var config Config
-	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+	// TODO: change it once creating the init file
+	configFilePath := filepath.Join(os.Getenv("HOME"), ".config", "syncAuto", "config.toml")
+
+	if _, err := toml.DecodeFile(configFilePath, &config); err != nil {
 		fmt.Println("Error reading config.toml:", err)
 		return
 	}
@@ -47,9 +55,9 @@ func main() {
 			continue
 		}
 		// TEST: test if expandedSource is valid
-		fmt.Printf("Syncing %s to %s\n", expandedSource, folderName)
+		fmt.Printf("Syncing %s to %s\n", expandedSource, folder.Destination)
 
-		for _, dest := range folder.Destinations {
+		for _, dest := range folder.Destination {
 			destParts := strings.Split(dest, ":")
 			if len(destParts) != 2 {
 				fmt.Printf("Invalid destination format in config for '%s': %s\n", folderName, dest)
