@@ -40,7 +40,8 @@ type Config struct {
 func main() {
 
 	// Create a log file
-	logFile, err := os.OpenFile("syncAuto.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logpath := filepath.Join(os.Getenv("HOME"), "repos", "syncAuto", "syncAuto.log")
+	logFile, err := os.OpenFile(logpath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
 		fmt.Println("Error creating log file:", err)
 		return
@@ -55,7 +56,7 @@ func main() {
 	}
 
 	var config Config
-	// TODO: change it once creating the init file
+	// TODO: change it once creating the init function
 	configFilePath := filepath.Join(os.Getenv("HOME"), ".config", "syncAuto", "config.toml")
 
 	if _, err := toml.DecodeFile(configFilePath, &config); err != nil {
@@ -86,14 +87,16 @@ func main() {
 
 }
 
+// TODO: add function to copy the file to the destination, so it's gonna by full automated service
+
 func syncToRemote(folder, sourceRemote, destRemote string, logger *log.Logger) {
-	_, err := exec.LookPath("rclone")
+	_, err := exec.LookPath("/usr/local/bin/rclone")
 	if err != nil {
 		logger.Println("Error: rclone not found in your PATH.")
 		return
 	}
 
-	cmd := exec.Command("rclone", "sync", folder, fmt.Sprintf("%s:%s", sourceRemote, destRemote))
+	cmd := exec.Command("/usr/local/bin/rclone", "sync", folder, fmt.Sprintf("%s:%s", sourceRemote, destRemote))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Printf("Note syncing folder '%s' to '%s': %v\nOutput: %s\n", folder, destRemote, err, out)
