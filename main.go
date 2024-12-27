@@ -8,11 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
-
-// TODO: add logic to truncate the log file with no dependency before getting so big
 
 // [folders]
 //     [folders.folder1]
@@ -32,6 +32,22 @@ type FolderConfig struct {
 
 type Config struct {
 	Folders map[string]FolderConfig `toml:"folders"`
+}
+
+type logEntry struct {
+	Timestamp  string
+	FolderName string
+	Operation  string
+	Message    string
+}
+
+func (l logEntry) String() string {
+	return fmt.Sprintf("[%s] [%s] [%s] %s", l.Timestamp, l.FolderName, l.Operation, l.Message)
+}
+
+func logMessage(logger *log.Logger, entry logEntry) {
+	entry.Timestamp = time.Now().Format(time.RFC3339)
+	logger.Println(entry)
 }
 
 func main() {
@@ -59,49 +75,85 @@ func main() {
 		return
 	}
 
-	// Sync loggeric
+	var wg sync.WaitGroup
+	semaphore := make(chan struct{}, 5) // Limit to 5 concurrent operations
+
 	for folderName, folder := range config.Folders {
-		expandedSource, err := expandTilde(folder.Source)
-		if err != nil {
-			logger.Printf("Error expanding tilde in '%s': %s\n", folderName, err)
+		wg.Add(1)
+		go func(name string, cfg FolderConfig) {
+			defer wg.Done()
+			semaphore <- struct{}{}        // Acquire semaphore
+			defer func() { <-semaphore }() // Release semaphore
+
+			if err := processFolderAsync(name, cfg, logger); err != nil {
+				logMessage(logger, logEntry{
+					FolderName: name,
+					Operation:  "ERROR",
+					Message:    fmt.Sprintf("Error processing folder: %v", err),
+				})
+			}
+		}(folderName, folder)
+	}
+	wg.Wait()
+}
+
+func processFolderAsync(folderName string, folder FolderConfig, logger *log.Logger) error {
+	expandedSource, err := expandTilde(folder.Source)
+	if err != nil {
+		return fmt.Errorf("error expanding tilde in '%s': %v", folderName, err)
+	}
+
+	copyFrom, _ := expandTilde(folder.OriginalSource)
+	if err := copyIsDir(copyFrom, expandedSource, logger, folderName); err != nil {
+		logMessage(logger, logEntry{
+			FolderName: folderName,
+			Operation:  "COPY_WARNING",
+			Message:    fmt.Sprintf("Warning copying item: '%s', maybe the original source path is empty: '%s'", err, copyFrom),
+		})
+	}
+
+	var syncWg sync.WaitGroup
+	for _, dest := range folder.Destination {
+		destParts := strings.Split(dest, ":")
+		if len(destParts) != 2 {
+			logMessage(logger, logEntry{
+				FolderName: folderName,
+				Operation:  "CONFIG_ERROR",
+				Message:    fmt.Sprintf("Invalid destination format in config: %s", dest),
+			})
 			continue
 		}
 
-		copyFrom, _ := expandTilde(folder.OriginalSource)
-		if err := copyItem(copyFrom, expandedSource, logger); err != nil {
-			logger.Printf("Warning copying item: '%s', maybe the original source path is empty: '%s'", err, copyFrom)
-		}
+		remoteType := destParts[0]
+		remotePath := destParts[1]
 
-		for _, dest := range folder.Destination {
-			destParts := strings.Split(dest, ":")
-			if len(destParts) != 2 {
-				logger.Printf("Invalid destination format in config for '%s': %s\n", folderName, dest)
-				continue
-			}
-
-			remoteType := destParts[0]
-			remotePath := destParts[1]
-			syncToRemote(expandedSource, remoteType, remotePath, logger)
-		}
+		syncWg.Add(1)
+		go func(src, rType, rPath string) {
+			defer syncWg.Done()
+			syncToRemote(src, rType, rPath, logger, folderName)
+		}(expandedSource, remoteType, remotePath)
 	}
+
+	syncWg.Wait()
+	return nil
 }
 
-// copyItem determines if the source is a file or directory and calls the appropriate function
-func copyItem(src, dst string, logger *log.Logger) error {
+// copyIsDir determines if the source is a file or directory and calls the appropriate function
+func copyIsDir(src, dst string, logger *log.Logger, folderName string) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
 	}
 
 	if info.IsDir() {
-		return copyDirectory(src, dst, logger)
+		return copyDirectory(src, dst, logger, folderName)
 	}
 	dst = filepath.Join(dst, filepath.Base(src)) // Add the file name to the destination path
-	return copyFile(src, dst, logger)
+	return copyFile(src, dst, logger, folderName)
 }
 
 // copyDirectory copies a directory from src to dst
-func copyDirectory(src, dst string, logger *log.Logger) error {
+func copyDirectory(src, dst string, logger *log.Logger, folderName string) error {
 	// Create the destination directory if it doesn't exist
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
@@ -119,13 +171,13 @@ func copyDirectory(src, dst string, logger *log.Logger) error {
 
 		if entry.IsDir() {
 			// Recursively copy subdirectories
-			if err := copyDirectory(srcEntry, dstEntry, logger); err != nil {
+			if err := copyDirectory(srcEntry, dstEntry, logger, folderName); err != nil {
 				return err
 			}
 			// TODO: remove this
 		} else {
 			// Copy files
-			if err := copyFile(srcEntry, dstEntry, logger); err != nil {
+			if err := copyFile(srcEntry, dstEntry, logger, folderName); err != nil {
 				return err
 			}
 		}
@@ -133,7 +185,7 @@ func copyDirectory(src, dst string, logger *log.Logger) error {
 	return nil
 }
 
-func copyFile(srcPath, dstPath string, logger *log.Logger) error {
+func copyFile(srcPath, dstPath string, logger *log.Logger, folderName string) error {
 	// 1. Open the source file for reading
 	srcFile, err := os.Open(srcPath)
 	if err != nil {
@@ -163,23 +215,39 @@ func copyFile(srcPath, dstPath string, logger *log.Logger) error {
 		return fmt.Errorf("error syncing destination file: %s", err)
 	}
 
-	logger.Println("File copied successfully!")
+	logMessage(logger, logEntry{
+		FolderName: folderName,
+		Operation:  "COPY",
+		Message:    fmt.Sprintf("File '%s' copied successfully to '%s'", filepath.Base(srcPath), dstPath),
+	})
 	return nil
 }
 
-func syncToRemote(folder, sourceRemote, destRemote string, logger *log.Logger) {
+func syncToRemote(folder, sourceRemote, destRemote string, logger *log.Logger, folderName string) {
 	_, err := exec.LookPath("/usr/local/bin/rclone")
 	if err != nil {
-		logger.Println("Error: rclone not found in your PATH.")
+		logMessage(logger, logEntry{
+			FolderName: folderName,
+			Operation:  "SYNC_ERROR",
+			Message:    "Error: rclone not found in your PATH.",
+		})
 		return
 	}
 
 	cmd := exec.Command("/usr/local/bin/rclone", "sync", folder, fmt.Sprintf("%s:%s", sourceRemote, destRemote))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Printf("Note syncing folder '%s' to '%s': %v\nOutput: %s\n", folder, destRemote, err, out)
+		logMessage(logger, logEntry{
+			FolderName: folderName,
+			Operation:  "SYNC_ERROR",
+			Message:    fmt.Sprintf("Error syncing folder '%s' to '%s': %v\nOutput: %s", folder, destRemote, err, out),
+		})
 	} else {
-		logger.Printf("Folder '%s' synced successfully to '%s:%s'\n", folder, sourceRemote, destRemote)
+		logMessage(logger, logEntry{
+			FolderName: folderName,
+			Operation:  "SYNC",
+			Message:    fmt.Sprintf("Folder '%s' synced successfully to '%s:%s'", folder, sourceRemote, destRemote),
+		})
 	}
 }
 
